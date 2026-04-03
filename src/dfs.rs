@@ -87,8 +87,7 @@ impl FSController {
         let dot = DirectoryEntry::new(inode_number, ".");
         let dotdot = DirectoryEntry::new(prev_inode, "..");
 
-        // TODO: create this method
-        let block_pos = self.find_block_offset(&self.block_1);
+        let block_pos = self.find_block_offset(&inode.block_1);
         let _ = self.disk.seek(std::io::SeekFrom::Start(block_pos));
 
         if let Err(e) = dot.write_be(&mut self.disk) {
@@ -110,6 +109,14 @@ impl FSController {
         let remainder = block_num % 8;
         let bit_mask = 7 - remainder;
         self.fs.block_bitmap[byte_idx as usize] |= bit_mask as u8;
+    }
+
+    fn find_block_offset(&self, block_id: &u16) -> u64 {
+        SUPERBLOCK_SIZE as u64
+            + BLOCK_SIZE as u64
+            + INODE_AREA_SIZE as u64
+            + BLOCK_SIZE as u64
+            + *block_id as u64 * BLOCK_SIZE as u64
     }
 
     fn find_inode_offset(&self, idx: &u16) -> u64 {
@@ -325,6 +332,11 @@ mod tests {
                 2, controller.fs.super_block.next_free_inode_pos
             ));
         }
+
+        // TODO: test inode position
+        // TODO: test inodes block's content
+
+
 
         let _ = remove_test_disk();
         assert!(errors.is_empty(), "\n{}", errors.join("\n"));
