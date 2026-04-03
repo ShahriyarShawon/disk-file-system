@@ -7,6 +7,8 @@ use std::io::prelude::*;
 const BLOCK_SIZE: u16 = 1024;
 const SUPERBLOCK_SIZE: usize = std::mem::size_of::<SuperBlock>();
 const INODE_SIZE: usize = std::mem::size_of::<INode>();
+// const INODE_PER_BLOCK: usize = BLOCK_SIZE as usize / INODE_SIZE;
+const INODE_AREA_SIZE: usize = BLOCK_SIZE as usize;
 
 #[derive(Debug)]
 pub enum FSError {
@@ -59,26 +61,43 @@ impl FSController {
         }
     }
 
-    pub fn instantiate_disk(&mut self) -> Result<u16, FSError> {
+    pub fn instantiate_disk(&mut self) -> Result<(), FSError> {
         self.disk
             .write(&[0; std::mem::size_of::<FileSystem>()])
             .unwrap();
         self.disk.seek(std::io::SeekFrom::Start(0)).unwrap();
-        if let Err(e) = self.fs.write_be(&mut self.disk) {
-            return Err(FSError::BinRw(e));
+        match self.fs.write_be(&mut self.disk) {
+            Ok(()) => {}
+            Err(e) => return Err(FSError::BinRw(e)),
         };
-        self.make_directory()
+        // root inode = 1
+        let _inode_number = self.make_directory(1)?;
+        Ok(())
     }
 
-    fn make_directory(&mut self) -> Result<u16, FSError> {
-        let inode_number = self.fs.super_block.next_free_inode_idx;
-        self.fs.super_block.next_free_inode_idx += 1;
+    fn make_directory(&mut self, prev_inode: u16) -> Result<u16, FSError> {
+        let inode_number = self.fs.super_block.next_free_inode_pos;
+        self.fs.super_block.next_free_inode_pos += 1;
         let mut inode = INode::new(EntryType::Directory);
         inode.block_1 = match self.get_free_block() {
             Ok(b) => b,
             Err(e) => return Err(FSError::Simple(format!("make_directory: {}", e))),
         };
-        self.mark_block_as_used(&inode.block_1);
+        // create the . and .. entries
+        let dot = DirectoryEntry::new(inode_number, ".");
+        let dotdot = DirectoryEntry::new(prev_inode, "..");
+
+        // TODO: create this method
+        let block_pos = self.find_block_offset(&self.block_1);
+        let _ = self.disk.seek(std::io::SeekFrom::Start(block_pos));
+
+        if let Err(e) = dot.write_be(&mut self.disk) {
+            return Err(FSError::BinRw(e));
+        }
+        if let Err(e) = dotdot.write_be(&mut self.disk) {
+            return Err(FSError::BinRw(e));
+        }
+        inode.file_size += (2 * std::mem::size_of::<DirectoryEntry>()) as u16;
         let _ = self.disk.seek(std::io::SeekFrom::Start(
             self.find_inode_offset(&inode_number),
         ));
@@ -93,16 +112,16 @@ impl FSController {
         self.fs.block_bitmap[byte_idx as usize] |= bit_mask as u8;
     }
 
-    fn find_inode_offset(&self, number: &u16) -> u64 {
-        SUPERBLOCK_SIZE as u64 + BLOCK_SIZE as u64 + *number as u64 * INODE_SIZE as u64
+    fn find_inode_offset(&self, idx: &u16) -> u64 {
+        SUPERBLOCK_SIZE as u64 + BLOCK_SIZE as u64 + *idx as u64 * INODE_SIZE as u64
     }
 
     fn get_free_block(&mut self) -> Result<u16, String> {
         let idx = self.fs.super_block.next_free_block;
-        if idx == 65535 {
+        if idx >= 65535 {
             return Err("get_free_block: No more blocks to allocate".to_string());
         }
-        // TODO: need some way of updating and then writing to disk the consumed inode in the inode block
+        self.mark_block_as_used(&idx);
         self.fs.super_block.next_free_block += 1;
         Ok(idx)
     }
@@ -133,13 +152,13 @@ pub struct SuperBlock {
     max_file_size: u16,
     block_size: u16,
     root_inode_pos: u16,
-    next_free_inode_idx: u16,
+    next_free_inode_pos: u16,
     next_free_block: u16,
     padding: [u8; 1004],
 }
 
 impl SuperBlock {
-    pub fn new(disk_size: u32) -> Self {
+    pub fn new(disk_size: u32, root_inode_pos: u16) -> Self {
         SuperBlock {
             magic_number: 0xDEADBEEF,
             n_inode: 1,
@@ -147,9 +166,8 @@ impl SuperBlock {
             n_blocks: (disk_size / BLOCK_SIZE as u32) as u16,
             max_file_size: 7 * BLOCK_SIZE,
             block_size: BLOCK_SIZE,
-            // TODO: this should point to where the root inode is, not an index
-            root_inode_pos: 1,
-            next_free_inode_idx: 1,
+            root_inode_pos,
+            next_free_inode_pos: 1,
             next_free_block: 1,
             padding: [1; 1004],
         }
@@ -214,18 +232,39 @@ impl INode {
 #[derive(Debug)]
 #[binrw]
 #[brw(big)]
+pub struct DirectoryEntry {
+    inode_number: u16,
+    file_name: [u8; 30],
+}
+
+impl DirectoryEntry {
+    fn new(inode_number: u16, fname: &str) -> Self {
+        let mut t = [0u8; 30];
+        t[..fname.len()].copy_from_slice(fname.as_bytes());
+        DirectoryEntry {
+            inode_number,
+            file_name: t,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+#[binrw]
+#[brw(big)]
 pub struct FileSystem {
     pub super_block: SuperBlock,
     block_bitmap: [u8; BLOCK_SIZE as usize],
-    inode_block: [u8; 16 * BLOCK_SIZE as usize],
+    inode_area: [u8; INODE_AREA_SIZE],
 }
 
 impl FileSystem {
     pub fn new() -> Self {
+        let root_inode_pos = std::mem::size_of::<FileSystem>() + BLOCK_SIZE as usize;
         FileSystem {
-            super_block: SuperBlock::new(512u32 * BLOCK_SIZE as u32),
+            super_block: SuperBlock::new(512u32 * BLOCK_SIZE as u32, root_inode_pos as u16),
             block_bitmap: [0; BLOCK_SIZE as usize],
-            inode_block: [0; 16 * BLOCK_SIZE as usize],
+            inode_area: [0; INODE_AREA_SIZE],
         }
     }
 }
@@ -270,6 +309,21 @@ mod tests {
                 "magic number read back was not 0xDEADBEEF, got {:X}",
                 controller.fs.super_block.magic_number
             ))
+        }
+
+        let des_root_inode_pos = std::mem::size_of::<FileSystem>() + BLOCK_SIZE as usize;
+        if controller.fs.super_block.root_inode_pos != des_root_inode_pos as u16 {
+            errors.push(format!(
+                "root_inode_pos: want={}, got={}",
+                des_root_inode_pos, controller.fs.super_block.root_inode_pos
+            ));
+        }
+
+        if controller.fs.super_block.next_free_inode_pos != 2 {
+            errors.push(format!(
+                "next_free_inode_pos: want={}, got={}",
+                2, controller.fs.super_block.next_free_inode_pos
+            ));
         }
 
         let _ = remove_test_disk();
