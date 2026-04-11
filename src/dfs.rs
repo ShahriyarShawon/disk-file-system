@@ -34,6 +34,7 @@ impl From<binrw::Error> for FSError {
 pub struct FSController {
     fs: FileSystem,
     disk: File,
+    cwd: u16
 }
 
 impl FSController {
@@ -45,6 +46,7 @@ impl FSController {
         FSController {
             fs: FileSystem::new(),
             disk: file,
+            cwd: 1
         }
     }
 
@@ -58,6 +60,7 @@ impl FSController {
         FSController {
             fs: file_system,
             disk: file,
+            cwd: 1,
         }
     }
 
@@ -75,18 +78,68 @@ impl FSController {
         Ok(())
     }
 
-    /// Opens a file in one of various different ways 
-    fn create_file(){
-        // locate directory to put file in
-        // get next free i node
-        // get next free i node storage position
-        // get next free block location
-        // point inode block 1 to that new location
-        // write i node to its location
-        // create entry in directory
+    // TODO: finish this
+    fn traverse_path(&self, tokens: &[&str]) -> Result<u16, FSError> {
+        // go through each directory name, find associated INode
+        // make sure that directory name appears in the directory
+        // follow i nodes until the inode of the parent directory
+        // (last token) is reached, return that inode
+        Err(FSError::Simple(format!("")))
     }
 
-    fn write(){
+    /// Opens a file in one of various different ways
+    /// TODO: change name to path, right now, create_file only creates files at root directory
+    fn create_file(&mut self, name: String) -> Result<u16, FSError> {
+        // locate directory to put file in
+        // let frags: Vec<&str> = name.split("/").collect();
+        // let (parent_path, fname) = match frags.split_last() {
+        //     Some((last, rest)) => (rest, last),
+        //     None => {
+        //         return Err(FSError::Simple(format!(
+        //             "Could not get holding path for {}",
+        //             name
+        //         )));
+        //     }
+        // };
+        // let dir_inode: INode = match self.traverse_path(parent_path) {
+        //     Ok(id) => {
+        //         let inode_loc = self.find_inode_offset(&id);
+        //         let _ = self.disk.seek(std::io::SeekFrom::Start(inode_loc));
+        //         INode::read_be(&mut self.disk)?
+        //     },
+        //     Err(e) => return Err(e)
+        // };
+        let inode_loc = self.find_inode_offset(&1u16);
+        let _ = self.disk.seek(std::io::SeekFrom::Start(inode_loc));
+        let dir_inode = INode::read_be(&mut self.disk)?;
+        // get next free i node
+        let inode_id = self.fs.super_block.next_free_inode_pos;
+        self.fs.super_block.next_free_block += 1;
+        // get next free i node storage location 
+        let inode_storage_loc = self.find_inode_offset(&inode_id);
+        // get next free block location
+        let next_free_block = match self.get_free_block() {
+            Ok(b) => b,
+            Err(e) => return Err(FSError::Simple(format!("make_directory: {}", e))),
+        };
+        // create inode
+        let mut inode = INode::new(EntryType::File);
+        // point inode block 1 to that new location
+        inode.block_1 = next_free_block;
+        // write i node to its location
+        let _ = self.disk.seek(std::io::SeekFrom::Start(inode_storage_loc));
+        inode.write_be(&mut self.disk)?;
+        // create entry in directory
+        let e = DirectoryEntry::new(inode_id, &name);
+        let block_pos = self.find_block_offset(&dir_inode.block_1);
+        let _ = self.disk.seek(std::io::SeekFrom::Start(block_pos));
+        e.write_be(&mut self.disk)?;
+
+        Ok(inode_id)
+    }
+
+    /// TODO: write
+    fn write() {
         // locate file in directory
         // read inode
         // see if the data you are writing to will need an extra block
@@ -98,31 +151,36 @@ impl FSController {
         //write inode changes
     }
 
-    fn stat(){
+    /// TODO: stat
+    fn stat() {
         // locate file's inode
         // just print out the inode
     }
 
+    /// TODO: rename
     fn rename() {
         // locate files inode entry in directory
         // change the entry name (the write will need to happen in the block that the directory
         // entry points to
     }
 
+    /// TODO: rmdir
     fn rmdir() {
         // must be recursive
         // delete all files by inode
         // call rmdir on each directory
         // change next free inode if needed
     }
-
+    /// TODO: delete_file
     fn delete_file() {
         // locate inode
         // mark blocks that inode points to as free
         // mark inode as free
         // change next free inode if needed
     }
-    fn read() {
+
+    // TODO: read
+    fn read(&self, fname: &str) {
         // locate files inode
         // read n bytes into vector and return that vector
     }
@@ -387,7 +445,6 @@ mod tests {
 
         // TODO: test inode position
         // TODO: test inodes block's content
-
 
         let _ = remove_test_disk();
         assert!(errors.is_empty(), "\n{}", errors.join("\n"));
