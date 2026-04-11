@@ -75,6 +75,58 @@ impl FSController {
         Ok(())
     }
 
+    /// Opens a file in one of various different ways 
+    fn create_file(){
+        // locate directory to put file in
+        // get next free i node
+        // get next free i node storage position
+        // get next free block location
+        // point inode block 1 to that new location
+        // write i node to its location
+        // create entry in directory
+    }
+
+    fn write(){
+        // locate file in directory
+        // read inode
+        // see if the data you are writing to will need an extra block
+        // if it needs extra blocks
+        ////find extra blocks
+        ////assign new blocks in inode
+        ////split data and write to those blocks
+        ////enforce a limit of 7KB
+        //write inode changes
+    }
+
+    fn stat(){
+        // locate file's inode
+        // just print out the inode
+    }
+
+    fn rename() {
+        // locate files inode entry in directory
+        // change the entry name (the write will need to happen in the block that the directory
+        // entry points to
+    }
+
+    fn rmdir() {
+        // must be recursive
+        // delete all files by inode
+        // call rmdir on each directory
+        // change next free inode if needed
+    }
+
+    fn delete_file() {
+        // locate inode
+        // mark blocks that inode points to as free
+        // mark inode as free
+        // change next free inode if needed
+    }
+    fn read() {
+        // locate files inode
+        // read n bytes into vector and return that vector
+    }
+
     fn make_directory(&mut self, prev_inode: u16) -> Result<u16, FSError> {
         let inode_number = self.fs.super_block.next_free_inode_pos;
         self.fs.super_block.next_free_inode_pos += 1;
@@ -335,7 +387,6 @@ mod tests {
 
         // TODO: test inode position
         // TODO: test inodes block's content
-
 
 
         let _ = remove_test_disk();
