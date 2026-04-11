@@ -7,7 +7,7 @@ use std::io::prelude::*;
 const BLOCK_SIZE: u16 = 1024;
 const SUPERBLOCK_SIZE: usize = std::mem::size_of::<SuperBlock>();
 const INODE_SIZE: usize = std::mem::size_of::<INode>();
-// const INODE_PER_BLOCK: usize = BLOCK_SIZE as usize / INODE_SIZE;
+const INODE_PER_BLOCK: usize = BLOCK_SIZE as usize / INODE_SIZE;
 const INODE_AREA_SIZE: usize = BLOCK_SIZE as usize;
 
 #[derive(Debug)]
@@ -75,8 +75,8 @@ impl FSController {
         Ok(())
     }
 
-    /// Opens a file in one of various different ways 
-    fn create_file(){
+    /// Opens a file in one of various different ways
+    fn create_file() {
         // locate directory to put file in
         // get next free i node
         // get next free i node storage position
@@ -86,7 +86,7 @@ impl FSController {
         // create entry in directory
     }
 
-    fn write(){
+    fn write() {
         // locate file in directory
         // read inode
         // see if the data you are writing to will need an extra block
@@ -98,7 +98,7 @@ impl FSController {
         //write inode changes
     }
 
-    fn stat(){
+    fn stat() {
         // locate file's inode
         // just print out the inode
     }
@@ -156,6 +156,12 @@ impl FSController {
         Ok(inode_number)
     }
 
+    fn mark_inode_as_used(&mut self, inode_num: &u16) {
+        let byte_idx = inode_num / 8;
+        let remainder = inode_num % 8;
+        let bit_mask = 7 - remainder;
+        self.fs.inode_bitmap[byte_idx as usize] |= bit_mask as u8;
+    }
     fn mark_block_as_used(&mut self, block_num: &u16) {
         let byte_idx = block_num / 8;
         let remainder = block_num % 8;
@@ -164,15 +170,42 @@ impl FSController {
     }
 
     fn find_block_offset(&self, block_id: &u16) -> u64 {
-        SUPERBLOCK_SIZE as u64
-            + BLOCK_SIZE as u64
-            + INODE_AREA_SIZE as u64
-            + BLOCK_SIZE as u64
-            + *block_id as u64 * BLOCK_SIZE as u64
+        std::mem::size_of::<FileSystem>() as u64
+        // empty block
+        + BLOCK_SIZE as u64
+        // actual offset of block
+        + (*block_id as u64 * BLOCK_SIZE as u64)
+
     }
 
     fn find_inode_offset(&self, idx: &u16) -> u64 {
-        SUPERBLOCK_SIZE as u64 + BLOCK_SIZE as u64 + *idx as u64 * INODE_SIZE as u64
+        std::mem::size_of::<FileSystem>() as u64
+        // size of file system will overshoot by INODE_AREA_SIZE
+        - INODE_AREA_SIZE as u64
+        // offset into inode_area
+        + (*idx as u64 * INODE_SIZE as u64)
+    }
+
+    fn get_next_free_inode(&mut self) -> Result<u16, FSError> {
+        // get_next_free_inode should, if no errors are present,
+        // always return a number that is greater than what was stored
+        // free-ing an inode will revert it back to a smaller number
+        loop {
+            let next_inode = self.fs.super_block.next_free_inode_pos + 1;
+
+            if next_inode as usize > INODE_PER_BLOCK {
+                return Err(FSError::Simple(format!("could not find free_inode")))
+            }
+
+            let byte_idx = (next_inode / 8) as usize;
+            let remainder = (next_inode % 8) as usize;
+            let bit_mask: u8 = (7 - remainder) as u8;
+            if self.fs.inode_bitmap[byte_idx] | bit_mask == 0 {
+                return Ok(next_inode);
+            } else {
+                continue;
+            }
+        }
     }
 
     fn get_free_block(&mut self) -> Result<u16, String> {
@@ -314,6 +347,7 @@ impl DirectoryEntry {
 pub struct FileSystem {
     pub super_block: SuperBlock,
     block_bitmap: [u8; BLOCK_SIZE as usize],
+    inode_bitmap: [u8; BLOCK_SIZE as usize],
     inode_area: [u8; INODE_AREA_SIZE],
 }
 
@@ -323,6 +357,7 @@ impl FileSystem {
         FileSystem {
             super_block: SuperBlock::new(512u32 * BLOCK_SIZE as u32, root_inode_pos as u16),
             block_bitmap: [0; BLOCK_SIZE as usize],
+            inode_bitmap: [0; BLOCK_SIZE as usize],
             inode_area: [0; INODE_AREA_SIZE],
         }
     }
@@ -387,7 +422,6 @@ mod tests {
 
         // TODO: test inode position
         // TODO: test inodes block's content
-
 
         let _ = remove_test_disk();
         assert!(errors.is_empty(), "\n{}", errors.join("\n"));
